@@ -163,9 +163,8 @@ from textblob import TextBlob
 
 # Load actual data from CSV files
 def load_data():
-    # Load both CSV files, skipping the "Table 1" header
-    df1 = pd.read_csv('zas.csv', skiprows=1)
-    df2 = pd.read_csv('zas2.csv', skiprows=1)
+    df1 = pd.read_csv('Books_rating.csv', skiprows=1)
+    df2 = pd.read_csv('books_data.csv', skiprows=1)
     return pd.concat([df1, df2], ignore_index=True)
 
 # Feature engineering based on actual data characteristics
