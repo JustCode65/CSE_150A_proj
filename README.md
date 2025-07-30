@@ -73,7 +73,8 @@ During implementation, we encountered a deprecation issue with pgmpy's `Bayesian
 
 ### Variable Interactions and Model Structure
 
-![Bayesian Network Structure](images/bayesian_network_structure.png)
+![Bayesian Network Structure](bayesian_network_structure.png)
+![Bayesian Network Structure](network_hiearchy.png)
 
 **Key Variables and Their Roles:**
 
@@ -183,7 +184,7 @@ print(f"Model trained on {len(train_data)} samples")
 
 #### 1. Rating Prediction Performance
 
-![Confusion Matrix](results/confusion_matrix_large.png)
+![Confusion Matrix](confusion_matrix_large.png)
 
 **Performance Metrics:**
 - **Mean Absolute Error (MAE)**: 0.76 stars
