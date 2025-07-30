@@ -74,7 +74,7 @@ During implementation, we encountered a deprecation issue with pgmpy's `Bayesian
 ### Variable Interactions and Model Structure
 
 ![Bayesian Network Structure](bayesian_network_structure.png)
-![Bayesian Network Structure](network_hiearchy.png)
+![Bayesian Network Structure](network_hierarchy.png)
 
 **Key Variables and Their Roles:**
 
