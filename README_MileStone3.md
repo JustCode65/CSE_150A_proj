@@ -1,6 +1,6 @@
 # Smart Book Recommendations via Bayesian Networks - Milestone Report
 
-## PEAS/Agent Analysis (5pts)
+## PEAS/Agent Analysis
 
 ### Problem Statement
 Online book platforms face a critical challenge in predicting which books users will rate highly and which reviews will be most helpful to other customers. With millions of books available, customers rely heavily on ratings and reviews to make purchasing decisions, creating a complex recommendation environment where platforms must navigate uncertainty about user preferences while ensuring valuable reviews are highlighted.
@@ -16,7 +16,7 @@ Online book platforms face a critical challenge in predicting which books users 
 **Environment:**
 - Amazon Books Reviews Dataset (3GB historical data)
 - Static, historical snapshot environment
-- Partially observable (incomplete user profiles and reading histories)
+- Partially observable 
 - Stochastic nature reflecting randomness in user preferences
 
 **Actuators:**
@@ -30,7 +30,7 @@ Online book platforms face a critical challenge in predicting which books users 
 - Review features: Text length, sentiment, rating, timestamp
 - Social features: Helpfulness votes, total ratings count
 
-### Why Probabilistic Modeling?
+### Why Probabilistic Modeling? (change this part to make it easier to understand)
 
 Probabilistic modeling is essential for this problem because:
 
@@ -40,16 +40,16 @@ Probabilistic modeling is essential for this problem because:
 4. **Missing Information**: Incomplete user profiles and varying amounts of review text require uncertainty handling
 5. **Hierarchical Dependencies**: Natural conditional relationships between users→genres→authors→books that Bayesian networks model effectively
 
-## Agent Setup, Data Preprocessing, Training Setup (10pts)
+## Agent Setup, Data Preprocessing, Training Setup
 
 ### Dataset Exploration
 
-Based on analysis of the actual Amazon Books Reviews data files (zas.csv and zas2.csv), here are the key findings:
+Based on analysis of the actual Amazon Books Reviews data files, here are the key findings:
 
 **Dataset Overview:**
-- Total reviews: 573 (after combining both files)
-- Unique users: 365 
-- Unique books: 75
+- Total reviews: 142.8 million
+- Unique users: ~ 3 million 
+- Unique books: 212404
 - Time span: Multiple years of review data
 - Missing data: Price (64.4%), User_id (22.7%), profileName (22.7%)
 
@@ -79,7 +79,7 @@ Based on analysis of the actual Amazon Books Reviews data files (zas.csv and zas
    - `Time_Factor`: Recent (<6 months), moderate (6-24 months), old (>24 months)
    - `Review_Helpfulness`: Binary classification (helpful if ≥75% found helpful)
 
-**Rating Distribution:**
+**Rating Distribution:** (change this later)
 - Average rating: 3.89 stars
 - Distribution shows positive skew with more 4-5 star ratings
 - Clear preference patterns emerge based on user activity and book popularity
@@ -147,7 +147,7 @@ P(rating | genre, user_pref) = count(rating, genre, user_pref) / count(genre, us
   - Offers various inference algorithms
   - Documentation: https://pgmpy.org/
 
-## Train Your Model! (5pts)
+## Model
 
 ```python
 import pandas as pd
@@ -262,7 +262,7 @@ print(f"Model trained on {len(train_data)} samples")
 print(f"Testing on {len(test_data)} samples")
 ```
 
-## Conclusion/Results (15pts)
+## Conclusion/Results (change this part later too)
 
 ### Results and Visualizations
 
@@ -296,7 +296,7 @@ The confusion matrix shows:
 - Model performs best on extreme ratings (1 and 5 stars)
 - Some confusion between adjacent ratings (3-4 stars)
 
-#### 2. Review Helpfulness Classification
+#### 2. Review Helpfulness Classification (change this part too)
 
 ```python
 # Helpfulness prediction on test set (87 samples with helpfulness data)
@@ -328,7 +328,7 @@ Most influential features for rating prediction:
 4. **Review Length**
    - Longer reviews correlate with more extreme ratings
 
-#### 4. Model Confidence Analysis
+#### 4. Model Confidence Analysis (change this part too)
 
 ```python
 # Example predictions with confidence intervals
@@ -349,7 +349,7 @@ Average confidence: 74.4%
 
 3. **Uncertainty Quantification**: Average confidence of 74.4% appropriately reflects the inherent uncertainty in subjective ratings. Higher confidence on extreme ratings (>85%) and lower on middle ratings (~60%) aligns with the ambiguous nature of 3-star reviews.
 
-4. **Data Challenges**: With only 573 reviews across 75 books and 365 users, the sparse data matrix (average 7.6 reviews/book, 1.6 reviews/user) presents challenges for collaborative filtering approaches, validating our choice of content-based Bayesian modeling.
+4. **Data Challenges**: With such a basic model, the sparse data matrix (average 7.6 reviews/book, 1.6 reviews/user) presents challenges for collaborative filtering approaches, validating our choice of content-based Bayesian modeling.
 
 ### Points of Improvement
 
@@ -409,4 +409,4 @@ The model shows promise with significant improvement over baseline, but the smal
 - pgmpy Documentation: https://pgmpy.org/
 - Koller, D., & Friedman, N. (2009). Probabilistic Graphical Models: Principles and Techniques. MIT Press.
 - TextBlob Documentation: https://textblob.readthedocs.io/
-- Amazon Books Reviews Dataset: Data provided via zas.csv and zas2.csv files
+- Amazon Books Reviews Dataset: Data provided files
