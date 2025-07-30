@@ -1,0 +1,109 @@
+import pandas as pd
+import numpy as np
+from pgmpy.models import BayesianNetwork
+from pgmpy.estimators import MaximumLikelihoodEstimator
+from pgmpy.inference import VariableElimination
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+from textblob import TextBlob
+
+# Load actual data from CSV files
+def load_data():
+    df1 = pd.read_csv('Books_rating.csv', skiprows=1)
+    df2 = pd.read_csv('books_data.csv', skiprows=1)
+    return pd.concat([df1, df2], ignore_index=True)
+
+# Feature engineering based on actual data characteristics
+def preprocess_data(data):
+    # Remove rows with missing essential fields
+    data = data.dropna(subset=['review/score', 'review/text'])
+    
+    # Create review length categories
+    data['review_length'] = data['review/text'].str.len()
+    data['Review_Length'] = pd.cut(data['review_length'], 
+                                   bins=[0, 200, 500, np.inf], 
+                                   labels=['short', 'medium', 'long'])
+    
+    # Simple sentiment analysis
+    data['Sentiment_Score'] = data['review/text'].apply(lambda x: 
+        'positive' if TextBlob(str(x)).sentiment.polarity > 0.1 else
+        'negative' if TextBlob(str(x)).sentiment.polarity < -0.1 else 'neutral')
+    
+    # Time factor from Unix timestamp
+    data['review_date'] = pd.to_datetime(data['review/time'], unit='s')
+    latest = data['review_date'].max()
+    data['days_ago'] = (latest - data['review_date']).dt.days
+    data['Time_Factor'] = pd.cut(data['days_ago'], 
+                                 bins=[0, 180, 730, np.inf], 
+                                 labels=['recent', 'moderate', 'old'])
+    
+    # Book popularity based on review counts
+    book_counts = data.groupby('Id').size()
+    data['book_count'] = data['Id'].map(book_counts)
+    data['Book_Popularity'] = pd.qcut(data['book_count'], q=3, 
+                                      labels=['low', 'medium', 'high'],
+                                      duplicates='drop')
+    
+    # User activity level
+    user_counts = data.groupby('User_id').size()
+    data['user_count'] = data['User_id'].map(user_counts)
+    data['User_Activity'] = pd.qcut(data['user_count'], q=3,
+                                    labels=['low', 'medium', 'high'],
+                                    duplicates='drop')
+    
+    # Helpfulness binary
+    data['Review_Helpfulness'] = data['review/helpfulness'].apply(
+        lambda x: 'helpful' if pd.notna(x) and '/' in str(x) and
+        int(str(x).split('/')[0]) / int(str(x).split('/')[1]) >= 0.75 
+        else 'not_helpful' if pd.notna(x) and '/' in str(x) else 'unknown')
+    
+    # Price categories
+    data['Price_Category'] = pd.cut(data['Price'].fillna(0), 
+                                    bins=[-0.1, 0.1, 10, 25, np.inf],
+                                    labels=['free', 'low', 'medium', 'high'])
+    
+    # Target variable
+    data['Rating_Prediction'] = data['review/score'].astype(int)
+    
+    return data
+
+# Define and train Bayesian Network
+def train_model(data):
+    # Define network structure
+    model = BayesianNetwork([
+        ('User_Activity', 'Rating_Prediction'),
+        ('Book_Popularity', 'Rating_Prediction'),
+        ('Review_Length', 'Sentiment_Score'),
+        ('Sentiment_Score', 'Rating_Prediction'),
+        ('Time_Factor', 'Review_Helpfulness'),
+        ('Rating_Prediction', 'Review_Helpfulness'),
+        ('Price_Category', 'Rating_Prediction')
+    ])
+    
+    # Select features for model
+    features = ['User_Activity', 'Book_Popularity', 'Price_Category',
+                'Review_Length', 'Sentiment_Score', 'Time_Factor',
+                'Rating_Prediction', 'Review_Helpfulness']
+    
+    model_data = data[features].dropna()
+    
+    # Chronological split (80/20)
+    model_data = model_data.sort_values(by=data['review_date'])
+    split_idx = int(len(model_data) * 0.8)
+    train_data = model_data.iloc[:split_idx]
+    test_data = model_data.iloc[split_idx:]
+    
+    # Fit model
+    model.fit(train_data, estimator=MaximumLikelihoodEstimator)
+    
+    return model, train_data, test_data
+
+# Main execution
+data = load_data()
+processed_data = preprocess_data(data)
+model, train_data, test_data = train_model(processed_data)
+
+print(f"Model trained on {len(train_data)} samples")
+print(f"Testing on {len(test_data)} samples")
