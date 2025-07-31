@@ -1951,7 +1951,7 @@ The enhanced model's exceptional performance (60.6% improvement over baseline) s
 
 #### 1. Rating Prediction Performance
 
-![Confusion Matrix](confusion_matrix_large.png)
+![Confusion Matrix](enhanced_evaluation_results.png)
 
 **Performance Metrics:**
 - **Mean Absolute Error (MAE)**: 0.76 stars
