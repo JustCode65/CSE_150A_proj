@@ -670,7 +670,7 @@ The moderate confidence (68.8%) appropriately reflects uncertainty even for like
 
 #### 3. Computational Performance
 
-- **Training time**: ~45 minutes on 3GB dataset
+- **Training time**: ~45 minutes on 3GB dataset (~15 min with pickles)
 - **Memory usage**: Peak ~8GB RAM during chunk processing
 - **Model file size**: ~250MB when serialized with pickle
 - **Inference time**: <10ms per prediction
