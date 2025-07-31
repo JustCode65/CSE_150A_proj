@@ -700,7 +700,7 @@ if __name__ == "__main__":
 ```python
 # See the improved implementation in the artifact above
 # Key changes include:
-# - ImprovedBayesianBookRatingPredictor class with parallel processing
+# - BayesianBookRatingPredictor class with parallel processing
 # - 25+ engineered features vs 7 in original
 # - Cross-validation and enhanced evaluation metrics
 # - Model explanation capabilities
