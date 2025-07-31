@@ -116,7 +116,7 @@ P(Rating | User_Activity, Book_Popularity, Sentiment) =
 
 The model learned 7 CPTs total, keeping the model compact and interpretable.
 
-## Train Your Model!
+## Model 1 (Prototype)
 
 ```python
 import pandas as pd
@@ -124,52 +124,518 @@ import numpy as np
 from pgmpy.models.DiscreteBayesianNetwork import DiscreteBayesianNetwork
 from pgmpy.estimators import MaximumLikelihoodEstimator
 from pgmpy.inference import VariableElimination
-from sklearn.metrics import mean_absolute_error, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+import gc
 from textblob import TextBlob
 import logging
+import pickle
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 class BayesianBookRatingPredictor:
-    """Discrete Bayesian Network for Book Rating Prediction"""
-    
     def __init__(self, chunk_size=100000, window_years=None):
         self.chunk_size = chunk_size
-        self.window_years = window_years  # None for historical data
+        self.window_years = window_years  # None means use all data
         self.model = None
+        self.feature_stats = {}
         self.training_date = None
         
-    def load_and_merge_data(self, ratings_file, books_file):
-        """Load and merge large CSV files efficiently"""
-        # Process in chunks for memory efficiency
-        # Handles 3GB dataset without memory issues
-        # Returns merged dataframe with ~3M reviews
+    def load_and_merge_data(self, ratings_file, books_file, sample_size=None):
+        """Load the huge CSV files without running out of memory"""
+        logging.info("Loading ratings data...")
         
+        # Figure out if we need a time cutoff
+        if self.window_years is not None:
+            cutoff_date = datetime.now() - timedelta(days=365 * self.window_years)
+            logging.info(f"Using sliding window: keeping reviews from {cutoff_date.strftime('%Y-%m-%d')} onwards")
+        else:
+            cutoff_date = None
+            logging.info("Using all available data (no time window)")
+        
+        # Load books data first since it's smaller
+        books_df = pd.read_csv(books_file)
+        logging.info(f"Loaded {len(books_df)} books")
+        
+        # Read ratings in chunks so we don't crash
+        ratings_chunks = []
+        total_rows = 0
+        kept_rows = 0
+        
+        for chunk in pd.read_csv(ratings_file, chunksize=self.chunk_size):
+            total_rows += len(chunk)
+            
+            chunk['review_date'] = pd.to_datetime(chunk['review/time'], unit='s')
+            
+            if cutoff_date is not None:
+                chunk = chunk[chunk['review_date'] > cutoff_date]
+            
+            # Remove reviews without scores or text
+            chunk = chunk.dropna(subset=['review/score', 'review/text'])
+            
+            # Merge with book info if we can
+            if 'Id' in chunk.columns and 'Id' in books_df.columns:
+                chunk = chunk.merge(books_df[['Id', 'categories', 'authors', 'publishedDate']], 
+                                   on='Id', how='left')
+            
+            ratings_chunks.append(chunk)
+            kept_rows += len(chunk)
+            
+            logging.info(f"Processed {total_rows} total rows, kept {kept_rows} reviews...")
+            
+            if sample_size and kept_rows >= sample_size:
+                break
+                
+        # Put all chunks together
+        data = pd.concat(ratings_chunks, ignore_index=True)
+        
+        # Make sure we actually have data
+        if len(data) == 0:
+            if self.window_years:
+                logging.warning(f"No reviews found after {cutoff_date.strftime('%Y-%m-%d')}. Try increasing window_years or set to None.")
+                raise ValueError(f"No reviews found within the {self.window_years}-year window. Your data might be too old. Try window_years=None to use all data.")
+            else:
+                raise ValueError("No valid reviews found in the dataset. Check your data format.")
+        
+        if sample_size and len(data) > sample_size:
+            logging.info(f"Sampling {sample_size} reviews from {len(data)} total...")
+            data = self._stratified_sample(data, sample_size)
+        
+        # Log some stats about what we loaded
+        oldest_review = data['review_date'].min()
+        newest_review = data['review_date'].max()
+        logging.info(f"Final dataset: {len(data)} reviews")
+        
+        if pd.notna(oldest_review) and pd.notna(newest_review):
+            logging.info(f"Date range: {oldest_review.strftime('%Y-%m-%d')} to {newest_review.strftime('%Y-%m-%d')}")
+        else:
+            logging.warning("Unable to determine date range - check review_date column")
+        
+        if self.window_years and cutoff_date:
+            logging.info(f"Window cutoff: Reviews after {cutoff_date.strftime('%Y-%m-%d')}")
+        
+        # Clean up memory
+        del ratings_chunks
+        gc.collect()
+        
+        return data
+    
+    def _stratified_sample(self, data, sample_size):
+        """Keep the same rating distribution when sampling"""
+        return data.groupby('review/score', group_keys=False).apply(
+            lambda x: x.sample(n=int(sample_size * len(x) / len(data)), 
+                             random_state=42)
+        )
+    
     def engineer_features(self, data):
-        """Create discrete features for Bayesian Network"""
-        # Discretize all continuous variables
-        # Handle missing data appropriately
-        # Create categorical features suitable for discrete BN
+        """Create all the features we need for our model"""
+        logging.info("Engineering features...")
         
+        # Save date range for later
+        self.date_range = {
+            'start': data['review_date'].min(),
+            'end': data['review_date'].max()
+        }
+        
+        # Review length categories
+        data['review_length'] = data['review/text'].str.len()
+        data['Review_Length'] = pd.cut(data['review_length'], 
+                                       bins=[0, 200, 500, np.inf], 
+                                       labels=['short', 'medium', 'long'])
+        
+        # Get sentiment scores
+        logging.info("Calculating sentiment scores...")
+        data['Sentiment_Score'] = self._batch_sentiment(data['review/text'])
+        
+        # Time-based features
+        data['review_date'] = pd.to_datetime(data['review/time'], unit='s')
+        latest = data['review_date'].max()
+        data['days_ago'] = (latest - data['review_date']).dt.days
+        data['Time_Factor'] = pd.cut(data['days_ago'], 
+                                     bins=[0, 180, 730, np.inf], 
+                                     labels=['recent', 'moderate', 'old'])
+        
+        logging.info("Calculating user and book statistics...")
+        
+        # How active is each user?
+        user_counts = data['User_id'].value_counts()
+        data['user_count'] = data['User_id'].map(user_counts)
+        
+        # Handle edge cases where qcut fails
+        try:
+            data['User_Activity'] = pd.qcut(data['user_count'], q=3,
+                                            labels=['low', 'medium', 'high'],
+                                            duplicates='drop')
+        except ValueError:
+            # If qcut fails, do it manually
+            percentiles = data['user_count'].quantile([0.33, 0.67])
+            data['User_Activity'] = pd.cut(data['user_count'],
+                                           bins=[0, percentiles.iloc[0], percentiles.iloc[1], data['user_count'].max()],
+                                           labels=['low', 'medium', 'high'],
+                                           include_lowest=True)
+        
+        # How popular is each book?
+        book_counts = data['Id'].value_counts()
+        data['book_count'] = data['Id'].map(book_counts)
+        
+        try:
+            data['Book_Popularity'] = pd.qcut(data['book_count'], q=3,
+                                              labels=['low', 'medium', 'high'],
+                                              duplicates='drop')
+        except ValueError:
+            percentiles = data['book_count'].quantile([0.33, 0.67])
+            data['Book_Popularity'] = pd.cut(data['book_count'],
+                                             bins=[0, percentiles.iloc[0], percentiles.iloc[1], data['book_count'].max()],
+                                             labels=['low', 'medium', 'high'],
+                                             include_lowest=True)
+        
+        # Parse helpfulness ratings
+        data['Review_Helpfulness'] = data['review/helpfulness'].apply(
+            self._parse_helpfulness)
+        
+        # Extract main category if available
+        if 'categories' in data.columns:
+            data['Has_Category'] = ~data['categories'].isna()
+            data['Main_Category'] = data['categories'].apply(
+                lambda x: self._extract_main_category(x) if pd.notna(x) else 'unknown')
+        
+        # Convert rating to int
+        data['Rating_Prediction'] = data['review/score'].astype(int)
+        
+        # Save some stats for later
+        self.feature_stats = {
+            'total_reviews': len(data),
+            'unique_users': data['User_id'].nunique(),
+            'unique_books': data['Id'].nunique(),
+            'avg_rating': data['Rating_Prediction'].mean(),
+            'rating_distribution': data['Rating_Prediction'].value_counts().to_dict()
+        }
+        
+        logging.info("Feature engineering complete")
+        return data
+    
+    def _batch_sentiment(self, texts, batch_size=1000):
+        """Calculate sentiment in batches so it doesn't take forever"""
+        sentiments = []
+        
+        for i in range(0, len(texts), batch_size):
+            batch = texts.iloc[i:i+batch_size]
+            batch_sentiments = batch.apply(lambda x: 
+                'positive' if TextBlob(str(x)).sentiment.polarity > 0.1 else
+                'negative' if TextBlob(str(x)).sentiment.polarity < -0.1 else 'neutral')
+            sentiments.extend(batch_sentiments)
+            
+            if i % 10000 == 0:
+                logging.info(f"Processed {i} reviews for sentiment...")
+                
+        return sentiments
+    
+    def _parse_helpfulness(self, helpfulness_str):
+        """Figure out if a review was marked helpful"""
+        if pd.isna(helpfulness_str) or helpfulness_str == '':
+            return 'unknown'
+        try:
+            helpful, total = map(int, str(helpfulness_str).split('/'))
+            if total == 0:
+                return 'unknown'
+            return 'helpful' if helpful / total >= 0.75 else 'not_helpful'
+        except:
+            return 'unknown'
+    
+    def _extract_main_category(self, category_str):
+        """Get the main category from the category list"""
+        try:
+            categories = eval(category_str)
+            return categories[0] if categories else 'unknown'
+        except:
+            return 'unknown'
+    
     def build_and_train_model(self, data):
-        """Build and train the Discrete Bayesian Network"""
-        model = DiscreteBayesianNetwork([
+        """Build and train our Bayesian Network"""
+        logging.info("Building Discrete Bayesian Network...")
+        
+        # Define the network structure
+        edges = [
             ('User_Activity', 'Rating_Prediction'),
             ('Book_Popularity', 'Rating_Prediction'),
             ('Review_Length', 'Sentiment_Score'),
             ('Sentiment_Score', 'Rating_Prediction'),
             ('Time_Factor', 'Review_Helpfulness'),
             ('Rating_Prediction', 'Review_Helpfulness'),
-        ])
+        ]
         
-        # Fit using Maximum Likelihood Estimation
-        model.fit(train_data, estimator=MaximumLikelihoodEstimator)
+        if 'Main_Category' in data.columns:
+            edges.append(('Main_Category', 'Rating_Prediction'))
+        
+        self.model = DiscreteBayesianNetwork(edges)
+        
+        # Pick which features to use
+        features = ['User_Activity', 'Book_Popularity', 'Review_Length', 
+                   'Sentiment_Score', 'Time_Factor', 'Rating_Prediction', 
+                   'Review_Helpfulness']
+        
+        if 'Main_Category' in data.columns:
+            features.append('Main_Category')
+        
+        model_data = data[features].dropna()
+        logging.info(f"Training on {len(model_data)} complete records")
+        
+        # Split 80/20 chronologically
+        model_data = model_data.sort_index()
+        split_idx = int(len(model_data) * 0.8)
+        train_data = model_data.iloc[:split_idx]
+        test_data = model_data.iloc[split_idx:]
+        
+        # Train the model
+        logging.info("Fitting model parameters...")
+        self.model.fit(train_data, estimator=MaximumLikelihoodEstimator)
+        
+        # Save when we trained it
+        self.training_date = datetime.now()
+        self.training_info = {
+            'training_date': self.training_date,
+            'window_years': self.window_years,
+            'training_samples': len(train_data),
+            'date_range': self.date_range
+        }
+        
+        logging.info(f"Model trained with {len(self.model.get_cpds())} CPDs")
+        logging.info(f"Training date: {self.training_date.strftime('%Y-%m-%d')}")
+        
+        return train_data, test_data
+    
+    def evaluate_model(self, test_data, sample_size=1000):
+        """See how well our model does"""
+        logging.info("Evaluating model...")
+        
+        # Sample if test set is huge
+        if len(test_data) > sample_size:
+            test_sample = test_data.sample(n=sample_size, random_state=42)
+        else:
+            test_sample = test_data
+            
+        inference = VariableElimination(self.model)
+        
+        true_ratings = []
+        predicted_ratings = []
+        
+        for idx, row in test_sample.iterrows():
+            # Get all features except what we're predicting
+            evidence = {col: row[col] for col in test_sample.columns 
+                       if col not in ['Rating_Prediction', 'Review_Helpfulness']}
+            
+            try:
+                # Make a prediction
+                result = inference.query(['Rating_Prediction'], evidence=evidence)
+                predicted = result.values.argmax() + 1
+                
+                true_ratings.append(row['Rating_Prediction'])
+                predicted_ratings.append(predicted)
+            except:
+                continue
+                
+        # Calculate how well we did
+        mae = mean_absolute_error(true_ratings, predicted_ratings)
+        within_one = np.mean(np.abs(np.array(true_ratings) - np.array(predicted_ratings)) <= 1)
+        
+        # Compare to baseline (just predicting average)
+        avg_rating = test_data['Rating_Prediction'].mean()
+        baseline_mae = mean_absolute_error(true_ratings, [round(avg_rating)] * len(true_ratings))
+        
+        results = {
+            'mae': mae,
+            'within_one_star': within_one,
+            'baseline_mae': baseline_mae,
+            'improvement': (baseline_mae - mae) / baseline_mae * 100,
+            'sample_size': len(true_ratings)
+        }
+        
+        logging.info(f"MAE: {mae:.2f}, Within ±1 star: {within_one:.1%}")
+        logging.info(f"Improvement over baseline: {results['improvement']:.1f}%")
+        
+        return results, true_ratings, predicted_ratings
+    
+    def predict_with_confidence(self, evidence):
+        """Make a prediction and adjust confidence based on model age"""
+        inference = VariableElimination(self.model)
+        
+        prediction = inference.query(['Rating_Prediction'], evidence=evidence)
+        predicted_rating = prediction.values.argmax() + 1
+        base_confidence = prediction.values.max()
+        
+        # Lower confidence if model is old
+        if self.training_date:
+            model_age_days = (datetime.now() - self.training_date).days
+            
+            if model_age_days > 180:
+                # Reduce confidence for old models
+                age_penalty = min(0.2 * (model_age_days - 180) / 180, 0.2)
+                adjusted_confidence = base_confidence * (1 - age_penalty)
+                
+                warning = f"Model is {model_age_days} days old - confidence reduced from {base_confidence:.2%} to {adjusted_confidence:.2%}"
+                logging.warning(warning)
+                
+                return {
+                    'rating': predicted_rating,
+                    'confidence': adjusted_confidence,
+                    'warning': warning,
+                    'model_age_days': model_age_days
+                }
+        
+        return {
+            'rating': predicted_rating,
+            'confidence': base_confidence,
+            'model_age_days': 0
+        }
+    
+    def check_model_health(self):
+        """Check if we need to retrain"""
+        if not self.training_date:
+            return {'status': 'unknown', 'message': 'No training date recorded'}
+        
+        model_age_days = (datetime.now() - self.training_date).days
+        
+        # Historical data doesn't really go bad
+        if hasattr(self, 'date_range') and self.date_range:
+            newest_data = self.date_range['end']
+            data_age_years = (datetime.now() - newest_data).days / 365
+            
+            if data_age_years > 10:
+                return {
+                    'status': 'historical',
+                    'message': f'Model trained on historical data (newest: {newest_data.strftime("%Y-%m-%d")}). Depreciation not applicable.',
+                    'model_age_days': model_age_days,
+                    'data_age_years': data_age_years
+                }
+        
+        # For current data
+        if model_age_days > 365:
+            return {
+                'status': 'critical',
+                'message': f'Model is {model_age_days} days old - retraining strongly recommended',
+                'model_age_days': model_age_days
+            }
+        elif model_age_days > 180:
+            return {
+                'status': 'warning',
+                'message': f'Model is {model_age_days} days old - consider retraining',
+                'model_age_days': model_age_days
+            }
+        else:
+            return {
+                'status': 'healthy',
+                'message': f'Model is {model_age_days} days old - within acceptable range',
+                'model_age_days': model_age_days
+            }
+    
+    def visualize_results(self, true_ratings, predicted_ratings, save_path='results/'):
+        """Make a confusion matrix"""
+        import os
+        os.makedirs(save_path, exist_ok=True)
+        
+        plt.figure(figsize=(8, 6))
+        cm = confusion_matrix(true_ratings, predicted_ratings)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                   xticklabels=range(1, 6), yticklabels=range(1, 6))
+        plt.xlabel('Predicted Rating')
+        plt.ylabel('True Rating')
+        plt.title('Rating Prediction Confusion Matrix')
+        plt.tight_layout()
+        plt.savefig(f'{save_path}confusion_matrix_large.png')
+        plt.close()
+        
+        logging.info(f"Visualizations saved to {save_path}")
+    
+    def save_model(self, filepath='bayesian_model.pkl'):
+        """Save everything we need to use the model later"""
+        model_data = {
+            'model': self.model,
+            'training_info': self.training_info,
+            'feature_stats': self.feature_stats,
+            'window_years': self.window_years
+        }
+        
+        with open(filepath, 'wb') as f:
+            pickle.dump(model_data, f)
+        
+        logging.info(f"Model saved to {filepath}")
+    
+    def load_model(self, filepath='bayesian_model.pkl'):
+        """Load a saved model"""
+        with open(filepath, 'rb') as f:
+            model_data = pickle.load(f)
+        
+        self.model = model_data['model']
+        self.training_info = model_data['training_info']
+        self.training_date = model_data['training_info']['training_date']
+        self.feature_stats = model_data['feature_stats']
+        self.window_years = model_data['window_years']
+        
+        health = self.check_model_health()
+        logging.info(f"Loaded model: {health['message']}")
+        
+        return health
 
-# Main execution
-predictor = BayesianBookRatingPredictor(chunk_size=100000, window_years=None)
-data = predictor.load_and_merge_data('Books_rating.csv', 'books_data.csv')
-data = predictor.engineer_features(data)
-train_data, test_data = predictor.build_and_train_model(data)
-
-print(f"Model trained on {len(train_data)} samples")
+# Main code
+if __name__ == "__main__":
+    # Set up the predictor
+    predictor = BayesianBookRatingPredictor(chunk_size=100000, window_years=None)
+    
+    # Load the data
+    data = predictor.load_and_merge_data(
+        'Books_rating.csv',
+        'books_data.csv'
+    )
+    
+    # Create features
+    data = predictor.engineer_features(data)
+    
+    # Show what we loaded
+    print("\n=== Dataset Statistics ===")
+    for key, value in predictor.feature_stats.items():
+        print(f"{key}: {value}")
+    
+    # Train the model
+    train_data, test_data = predictor.build_and_train_model(data)
+    
+    # Test it
+    results, true_ratings, predicted_ratings = predictor.evaluate_model(test_data)
+    
+    # Make visualizations
+    predictor.visualize_results(true_ratings, predicted_ratings)
+    
+    # Save for later
+    predictor.save_model('bayesian_book_model.pkl')
+    
+    # Check if it's getting old
+    health_status = predictor.check_model_health()
+    print(f"\nModel Health: {health_status['status'].upper()} - {health_status['message']}")
+    
+    print("\n=== Final Results ===")
+    print(f"MAE: {results['mae']:.2f} stars")
+    print(f"Within ±1 star: {results['within_one_star']:.1%}")
+    print(f"Improvement over baseline: {results['improvement']:.1f}%")
+    print(f"\nModel trained on data from: {predictor.training_info['date_range']['start']} to {predictor.training_info['date_range']['end']}")
+    
+    # Try making a prediction
+    print("\n=== Example Prediction ===")
+    sample_evidence = {
+        'User_Activity': 'medium',
+        'Book_Popularity': 'high',
+        'Review_Length': 'long',
+        'Sentiment_Score': 'positive',
+        'Time_Factor': 'recent'
+    }
+    
+    prediction = predictor.predict_with_confidence(sample_evidence)
+    print(f"Predicted rating: {prediction['rating']} stars")
+    print(f"Confidence: {prediction['confidence']:.1%}")
+    if 'warning' in prediction:
+        print(f"Warning: {prediction['warning']}")
 ```
 
 ## Conclusion/Results
