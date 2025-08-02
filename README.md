@@ -720,6 +720,21 @@ from scipy import stats
 from collections import defaultdict
 import os
 
+This implementation uses Bayesian Networks for book rating prediction with enhanced
+feature engineering and parallel processing capabilities.
+
+References:
+- pgmpy: Ankan, A., & Panda, A. (2015). pgmpy: Probabilistic Graphical Models using Python
+- TextBlob: Loria, S. (2018). textblob Documentation. https://textblob.readthedocs.io/
+- scikit-learn: Pedregosa, F., et al. (2011). Scikit-learn: Machine learning in Python
+- Koller & Friedman (2009). Probabilistic Graphical Models: Principles and Techniques
+
+Key Algorithms:
+- Variable Elimination for exact inference (Koller & Friedman, 2009)
+- BDeu prior for Bayesian parameter estimation (Heckerman et al., 1995)
+- KL divergence for feature importance (Kullback & Leibler, 1951)
+
+
 # shut up those annoying warnings
 warnings.filterwarnings('ignore')
 
